@@ -1,0 +1,7 @@
+{
+    "genesis_time": "2020=07-17T00:00:00.000000000Z",
+    "chain_id": "the-blockchain-bar-ledger",
+    "balances": {
+        "paulc": 1000000
+    }
+}
