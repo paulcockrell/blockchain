@@ -5,24 +5,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"time"
 )
 
 type State struct {
 	Balances  map[Account]uint
 	txMempool []Tx
 
-	dbFile *os.File
+	dbFile          *os.File
+	latestBlockHash Hash
 }
 
-func NewStateFromDisk() (*State, error) {
-	cwd, err := os.Getwd()
+func NewStateFromDisk(dataDir string) (*State, error) {
+	err := initDataDirIfNotExists(dataDir)
 	if err != nil {
-		return nil, err
+		return &State{}, err
 	}
 
-	genFilePath := filepath.Join(cwd, "database", "genesis.json")
-	gen, err := loadGenesis(genFilePath)
+	gen, err := loadGenesis(getGenesisJSONFilePath(dataDir))
 	if err != nil {
 		return nil, err
 	}
@@ -32,14 +32,13 @@ func NewStateFromDisk() (*State, error) {
 		balances[account] = balance
 	}
 
-	txDbFilePath := filepath.Join(cwd, "database", "tx.db")
-	f, err := os.OpenFile(txDbFilePath, os.O_APPEND|os.O_RDWR, 0600)
+	f, err := os.OpenFile(getBlocksDBFilePath(dataDir), os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
 
 	scanner := bufio.NewScanner(f)
-	state := &State{balances, make([]Tx, 0), f}
+	state := &State{balances, make([]Tx, 0), f, Hash{}}
 
 	// Iterate over each the tx.db file's lines
 	for scanner.Scan() {
@@ -47,21 +46,35 @@ func NewStateFromDisk() (*State, error) {
 			return nil, err
 		}
 
-		// Convert JSON encoded TX into an object (struct)
-		var tx Tx
-		json.Unmarshal(scanner.Bytes(), &tx)
-
-		// Rebuild the state (user balances)
-		// as a series of events
-		if err := state.apply(tx); err != nil {
+		blockFsJSON := scanner.Bytes()
+		var blockFs BlockFS
+		err = json.Unmarshal(blockFsJSON, &blockFs)
+		if err != nil {
 			return nil, err
 		}
+
+		err := state.applyBlock(blockFs.Value)
+		if err != nil {
+			return nil, err
+		}
+
+		state.latestBlockHash = blockFs.Key
 	}
 
 	return state, nil
 }
 
-func (s *State) Add(tx Tx) error {
+func (s *State) AddBlock(b Block) error {
+	for _, tx := range b.TXs {
+		if err := s.AddTx(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *State) AddTx(tx Tx) error {
 	if err := s.apply(tx); err != nil {
 		return err
 	}
@@ -71,24 +84,38 @@ func (s *State) Add(tx Tx) error {
 	return nil
 }
 
-func (s *State) Persist() error {
-	// Make a copy of mempool because the s.TxMempool will be modified
-	// in the loop below
-	mempool := make([]Tx, len(s.txMempool))
-	copy(mempool, s.txMempool)
+func (s *State) Persist() (Hash, error) {
+	block := NewBlock(s.latestBlockHash, uint64(time.Now().Unix()), s.txMempool)
+	blockHash, err := block.Hash()
+	if err != nil {
+		return Hash{}, nil
+	}
 
-	for i := 0; i < len(mempool); i++ {
-		txJson, err := json.Marshal(s.txMempool[i])
-		if err != nil {
+	blockFs := BlockFS{blockHash, block}
+
+	blockFsJSON, err := json.Marshal(blockFs)
+	if err != nil {
+		return Hash{}, nil
+	}
+
+	fmt.Printf("Persisting new Block to disk\n")
+	fmt.Printf("\t%s\n", blockFsJSON)
+
+	if _, err = s.dbFile.Write(append(blockFsJSON, '\n')); err != nil {
+		return Hash{}, err
+	}
+
+	s.latestBlockHash = blockHash
+	s.txMempool = []Tx{}
+
+	return s.latestBlockHash, nil
+}
+
+func (s *State) applyBlock(b Block) error {
+	for _, tx := range b.TXs {
+		if err := s.apply(tx); err != nil {
 			return err
 		}
-
-		if _, err = s.dbFile.Write(append(txJson, '\n')); err != nil {
-			return err
-		}
-
-		// Remove the TX written to a file from the mempool
-		s.txMempool = append(s.txMempool[:i], s.txMempool[i+1:]...)
 	}
 
 	return nil
@@ -100,7 +127,7 @@ func (s *State) apply(tx Tx) error {
 		return nil
 	}
 
-	if tx.Value > s.Balances[tx.From] {
+	if s.Balances[tx.From] < tx.Value {
 		return fmt.Errorf("insufficient balance")
 	}
 
@@ -108,4 +135,12 @@ func (s *State) apply(tx Tx) error {
 	s.Balances[tx.To] += tx.Value
 
 	return nil
+}
+
+func (s *State) Close() error {
+	return s.dbFile.Close()
+}
+
+func (s *State) LatestBlockHash() Hash {
+	return s.latestBlockHash
 }
