@@ -12,11 +12,16 @@ type State struct {
 	Balances  map[Account]uint
 	txMempool []Tx
 
-	dbFile          *os.File
+	dbFile *os.File
+
+	latestBlock     Block
 	latestBlockHash Hash
+	hasGenesisBlock bool
 }
 
 func NewStateFromDisk(dataDir string) (*State, error) {
+	dataDir = ExpandPath(dataDir)
+
 	err := initDataDirIfNotExists(dataDir)
 	if err != nil {
 		return &State{}, err
@@ -32,14 +37,25 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 		balances[account] = balance
 	}
 
-	f, err := os.OpenFile(getBlocksDBFilePath(dataDir), os.O_APPEND|os.O_RDWR, 0600)
+	f, err := os.OpenFile(
+		getBlocksDBFilePath(dataDir),
+		os.O_APPEND|os.O_RDWR,
+		0600,
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	scanner := bufio.NewScanner(f)
-	state := &State{balances, make([]Tx, 0), f, Hash{}}
+	state := &State{
+		balances,
+		make([]Tx, 0),
+		f,
+		Block{},
+		Hash{},
+		false,
+	}
 
+	scanner := bufio.NewScanner(f)
 	// Iterate over each the tx.db file's lines
 	for scanner.Scan() {
 		if err := scanner.Err(); err != nil {
@@ -47,17 +63,22 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 		}
 
 		blockFsJSON := scanner.Bytes()
+		if len(blockFsJSON) == 0 {
+			break
+		}
+
 		var blockFs BlockFS
 		err = json.Unmarshal(blockFsJSON, &blockFs)
 		if err != nil {
 			return nil, err
 		}
 
-		err := state.applyBlock(blockFs.Value)
+		err = state.applyBlock(blockFs.Value)
 		if err != nil {
 			return nil, err
 		}
 
+		state.latestBlock = blockFs.Value
 		state.latestBlockHash = blockFs.Key
 	}
 
@@ -85,7 +106,17 @@ func (s *State) AddTx(tx Tx) error {
 }
 
 func (s *State) Persist() (Hash, error) {
-	block := NewBlock(s.latestBlockHash, uint64(time.Now().Unix()), s.txMempool)
+	latestBlockHash, err := s.latestBlock.Hash()
+	if err != nil {
+		return Hash{}, err
+	}
+
+	block := NewBlock(
+		latestBlockHash,
+		s.latestBlock.Header.Number+1, // Increase height
+		uint64(time.Now().Unix()),
+		s.txMempool,
+	)
 	blockHash, err := block.Hash()
 	if err != nil {
 		return Hash{}, nil
@@ -105,10 +136,11 @@ func (s *State) Persist() (Hash, error) {
 		return Hash{}, err
 	}
 
-	s.latestBlockHash = blockHash
+	s.latestBlockHash = latestBlockHash
+	s.latestBlock = block
 	s.txMempool = []Tx{}
 
-	return s.latestBlockHash, nil
+	return latestBlockHash, nil
 }
 
 func (s *State) applyBlock(b Block) error {
@@ -139,6 +171,10 @@ func (s *State) apply(tx Tx) error {
 
 func (s *State) Close() error {
 	return s.dbFile.Close()
+}
+
+func (s *State) LatestBlock() Block {
+	return s.latestBlock
 }
 
 func (s *State) LatestBlockHash() Hash {
