@@ -1,7 +1,10 @@
 package node
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/paulcockrell/blockchain/database"
 )
@@ -27,9 +30,18 @@ type TxAddRes struct {
 }
 
 type StatusRes struct {
-	Hash       database.Hash `json:"block_hash"`
-	Number     uint64        `json:"block_number"`
-	KnownPeers []PeerNode    `json:"peers_known"`
+	Hash       database.Hash       `json:"block_hash"`
+	Number     uint64              `json:"block_number"`
+	KnownPeers map[string]PeerNode `json:"peers_known"`
+}
+
+type SyncRes struct {
+	Blocks []database.Block `json:"blocks"`
+}
+
+type AddPeerRes struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
 }
 
 func listBalancesHandler(w http.ResponseWriter, r *http.Request, state *database.State) {
@@ -45,13 +57,14 @@ func txAddHandler(w http.ResponseWriter, r *http.Request, state *database.State)
 	}
 
 	tx := database.NewTx(database.NewAccount(req.From), database.NewAccount(req.To), req.Value, req.Data)
-	err = state.AddTx(tx)
-	if err != nil {
-		writeErrRes(w, err)
-		return
-	}
+	block := database.NewBlock(
+		state.LatestBlockHash(),
+		state.NextBlockNumber(),
+		uint64(time.Now().Unix()),
+		[]database.Tx{tx},
+	)
 
-	hash, err := state.Persist()
+	hash, err := state.AddBlock(block)
 	if err != nil {
 		writeErrRes(w, err)
 		return
@@ -68,4 +81,40 @@ func statusHandler(w http.ResponseWriter, r *http.Request, node *Node) {
 	}
 
 	writeRes(w, res)
+}
+
+func syncHandler(w http.ResponseWriter, r *http.Request, node *Node) {
+	reqHash := r.URL.Query().Get(endpointSyncQueryKeyFromBlock)
+
+	hash := database.Hash{}
+	err := hash.UnmarshalText([]byte(reqHash))
+	if err != nil {
+		writeErrRes(w, err)
+		return
+	}
+
+	blocks, err := database.GetBlocksAfter(hash, node.dataDir)
+	if err != nil {
+		writeErrRes(w, err)
+		return
+	}
+
+	writeRes(w, SyncRes{Blocks: blocks})
+}
+
+func addPeerHandler(w http.ResponseWriter, r *http.Request, node *Node) {
+	peerIP := r.URL.Query().Get(endpointAddPeerQueryKeyIP)
+	peerPortRaw := r.URL.Query().Get(endpointAddPeerQueryKeyPort)
+
+	peerPort, err := strconv.ParseUint(peerPortRaw, 10, 32)
+	if err != nil {
+		writeRes(w, AddPeerRes{false, err.Error()})
+		return
+	}
+
+	peer := NewPeerNode(peerIP, peerPort, false, true)
+	node.AddPeer(peer)
+	fmt.Printf("Peer '%s' was added to known peers\n", peer.TcpAddress())
+
+	writeRes(w, AddPeerRes{true, ""})
 }
