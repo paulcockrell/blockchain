@@ -3,6 +3,8 @@ package database
 import (
 	"encoding/json"
 	"io/ioutil"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 var genesisJSON = `
@@ -15,7 +17,7 @@ var genesisJSON = `
 }`
 
 type genesis struct {
-	Balances map[Account]uint `json:"balances"`
+	Balances map[common.Address]uint `json:"balances"`
 }
 
 func writeGenesisToDisk(path string) error {

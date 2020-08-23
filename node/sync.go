@@ -24,7 +24,7 @@ func (n *Node) sync(ctx context.Context) error {
 
 func (n *Node) doSync() {
 	for _, peer := range n.knownPeers {
-		if n.ip == peer.IP && n.port == peer.Port {
+		if n.info.IP == peer.IP && n.info.Port == peer.Port {
 			continue
 		}
 
@@ -52,7 +52,13 @@ func (n *Node) doSync() {
 			continue
 		}
 
-		err = n.syncKnownPeers(peer, status)
+		err = n.syncKnownPeers(status)
+		if err != nil {
+			fmt.Printf("Error: %s\n", err)
+			continue
+		}
+
+		err = n.syncPendingTXs(peer, status.PendingTXs)
 		if err != nil {
 			fmt.Printf("Error: %s\n", err)
 			continue
@@ -63,7 +69,7 @@ func (n *Node) doSync() {
 func (n *Node) syncBlocks(peer PeerNode, status StatusRes) error {
 	localBlockNumber := n.state.LatestBlock().Header.Number
 
-	// If the peer has no blocks ignore it
+	// If the peer has no blocks, ignore it
 	if status.Hash.IsEmpty() {
 		return nil
 	}
@@ -73,26 +79,35 @@ func (n *Node) syncBlocks(peer PeerNode, status StatusRes) error {
 		return nil
 	}
 
-	// If it's the genesis block and we already synced it ignore it
+	// If it's the genesis block and we already synced it, ignore it
 	if status.Number == 0 && !n.state.LatestBlockHash().IsEmpty() {
 		return nil
 	}
 
+	// Display found 1 new block if we sync the genesis block 0
 	newBlocksCount := status.Number - localBlockNumber
 	if localBlockNumber == 0 && status.Number == 0 {
 		newBlocksCount = 1
 	}
-	fmt.Printf("Found %d new blocks from peer %s\n", newBlocksCount, peer.TcpAddress())
+	fmt.Printf("Found %d new blocks from Peer %s\n", newBlocksCount, peer.TcpAddress())
 
 	blocks, err := fetchBlocksFromPeer(peer, n.state.LatestBlockHash())
 	if err != nil {
 		return err
 	}
 
-	return n.state.AddBlocks(blocks)
+	for _, block := range blocks {
+		_, err := n.state.AddBlock(block)
+		if err != nil {
+			return err
+		}
+		n.newSyncedBlocks <- block
+	}
+
+	return nil
 }
 
-func (n *Node) syncKnownPeers(peer PeerNode, status StatusRes) error {
+func (n *Node) syncKnownPeers(status StatusRes) error {
 	for _, statusPeer := range status.KnownPeers {
 		if !n.IsKnownPeer(statusPeer) {
 			fmt.Printf("Found new Peer %s\n", statusPeer.TcpAddress())
@@ -103,8 +118,19 @@ func (n *Node) syncKnownPeers(peer PeerNode, status StatusRes) error {
 	return nil
 }
 
+func (n *Node) syncPendingTXs(peer PeerNode, txs []database.Tx) error {
+	for _, tx := range txs {
+		err := n.AddPendingTX(tx, peer)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (n *Node) joinKnownPeers(peer PeerNode) error {
-	if peer.conected {
+	if peer.connected {
 		return nil
 	}
 
@@ -113,9 +139,9 @@ func (n *Node) joinKnownPeers(peer PeerNode) error {
 		peer.TcpAddress(),
 		endpointAddPeer,
 		endpointAddPeerQueryKeyIP,
-		n.ip,
+		n.info.IP,
 		endpointAddPeerQueryKeyPort,
-		n.port,
+		n.info.Port,
 	)
 
 	res, err := http.Get(url)
@@ -133,7 +159,7 @@ func (n *Node) joinKnownPeers(peer PeerNode) error {
 	}
 
 	knownPeer := n.knownPeers[peer.TcpAddress()]
-	knownPeer.conected = addPeerRes.Success
+	knownPeer.connected = addPeerRes.Success
 
 	n.AddPeer(knownPeer)
 

@@ -1,22 +1,44 @@
 package database
 
-type Account string
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"time"
 
-func NewAccount(value string) Account {
-	return Account(value)
+	"github.com/ethereum/go-ethereum/common"
+)
+
+func NewAccount(value string) common.Address {
+	return common.HexToAddress(value)
 }
 
 type Tx struct {
-	From  Account `json:"from"`
-	To    Account `json:"to"`
-	Value uint    `json:"value"`
-	Data  string  `json:"data"`
+	From  common.Address `json:"from"`
+	To    common.Address `json:"to"`
+	Value uint           `json:"value"`
+	Data  string         `json:"data"`
+	Time  uint64         `json:"time"`
 }
 
-func NewTx(from, to Account, value uint, data string) Tx {
-	return Tx{from, to, value, data}
+func NewTx(from, to common.Address, value uint, data string) Tx {
+	return Tx{
+		from,
+		to,
+		value,
+		data,
+		uint64(time.Now().Unix()),
+	}
 }
 
 func (t Tx) IsReward() bool {
 	return t.Data == "reward"
+}
+
+func (t Tx) Hash() (Hash, error) {
+	txJson, err := json.Marshal(t)
+	if err != nil {
+		return Hash{}, nil
+	}
+
+	return sha256.Sum256(txJson), nil
 }

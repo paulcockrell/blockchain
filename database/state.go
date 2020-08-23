@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"time"
+	"sort"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type State struct {
-	Balances  map[Account]uint
-	txMempool []Tx
+	Balances map[common.Address]uint
 
 	dbFile *os.File
 
@@ -31,7 +32,7 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 		return nil, err
 	}
 
-	balances := make(map[Account]uint)
+	balances := make(map[common.Address]uint)
 	for account, balance := range gen.Balances {
 		balances[account] = balance
 	}
@@ -48,7 +49,6 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 
 	state := &State{
 		balances,
-		make([]Tx, 0),
 		f,
 		Block{},
 		Hash{},
@@ -73,7 +73,7 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 			return nil, err
 		}
 
-		err = applyTXs(blockFs.Value.TXs, state)
+		err = applyBlock(blockFs.Value, state)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +99,7 @@ func (s *State) AddBlocks(blocks []Block) error {
 func (s *State) AddBlock(b Block) (Hash, error) {
 	pendingState := s.copy()
 
-	err := applyBlock(b, pendingState)
+	err := applyBlock(b, &pendingState)
 	if err != nil {
 		return Hash{}, err
 	}
@@ -115,7 +115,7 @@ func (s *State) AddBlock(b Block) (Hash, error) {
 		return Hash{}, err
 	}
 
-	fmt.Printf("Persisting new block to disk:\n")
+	fmt.Printf("\nPersisting new block to disk:\n")
 	fmt.Printf("\t%s\n", blockFsJSON)
 
 	_, err = s.dbFile.Write(append(blockFsJSON, '\n'))
@@ -137,54 +137,6 @@ func (s *State) NextBlockNumber() uint64 {
 	}
 
 	return s.LatestBlock().Header.Number + 1
-}
-
-func (s *State) AddTx(tx Tx) error {
-	if err := s.apply(tx); err != nil {
-		return err
-	}
-
-	s.txMempool = append(s.txMempool, tx)
-
-	return nil
-}
-
-func (s *State) Persist() (Hash, error) {
-	latestBlockHash, err := s.latestBlock.Hash()
-	if err != nil {
-		return Hash{}, err
-	}
-
-	block := NewBlock(
-		latestBlockHash,
-		s.latestBlock.Header.Number+1, // Increase height
-		uint64(time.Now().Unix()),
-		s.txMempool,
-	)
-	blockHash, err := block.Hash()
-	if err != nil {
-		return Hash{}, nil
-	}
-
-	blockFs := BlockFS{blockHash, block}
-
-	blockFsJSON, err := json.Marshal(blockFs)
-	if err != nil {
-		return Hash{}, nil
-	}
-
-	fmt.Printf("Persisting new Block to disk\n")
-	fmt.Printf("\t%s\n", blockFsJSON)
-
-	if _, err = s.dbFile.Write(append(blockFsJSON, '\n')); err != nil {
-		return Hash{}, err
-	}
-
-	s.latestBlockHash = latestBlockHash
-	s.latestBlock = block
-	s.txMempool = []Tx{}
-
-	return latestBlockHash, nil
 }
 
 func (s *State) apply(tx Tx) error {
@@ -220,22 +172,18 @@ func (s *State) copy() State {
 	c.hasGenesisBlock = s.hasGenesisBlock
 	c.latestBlock = s.latestBlock
 	c.latestBlockHash = s.latestBlockHash
-	c.txMempool = make([]Tx, len(s.txMempool))
-	c.Balances = make(map[Account]uint)
+	c.Balances = make(map[common.Address]uint)
 
 	for acc, balance := range s.Balances {
 		c.Balances[acc] = balance
 	}
 
-	for _, tx := range s.txMempool {
-		c.txMempool = append(c.txMempool, tx)
-	}
-
 	return c
 }
 
-func applyBlock(b Block, s State) error {
+func applyBlock(b Block, s *State) error {
 	nextExpectedNumber := s.latestBlock.Header.Number + 1
+
 	if s.hasGenesisBlock && b.Header.Number != nextExpectedNumber {
 		return fmt.Errorf("next expected block was '%d' not '%d'", nextExpectedNumber, b.Header.Number)
 	}
@@ -244,10 +192,30 @@ func applyBlock(b Block, s State) error {
 		return fmt.Errorf("next block parent hash must be '%x' not '%x'", s.latestBlockHash, b.Header.Parent)
 	}
 
-	return applyTXs(b.TXs, &s)
+	hash, err := b.Hash()
+	if err != nil {
+		return err
+	}
+
+	if !IsBlockHashValid(hash) {
+		return fmt.Errorf("invalid block ash %x", hash)
+	}
+
+	err = applyTXs(b.TXs, s)
+	if err != nil {
+		return err
+	}
+
+	s.Balances[b.Header.Miner] += BlockReward
+
+	return nil
 }
 
 func applyTXs(txs []Tx, s *State) error {
+	sort.Slice(txs, func(i, j int) bool {
+		return txs[i].Time < txs[j].Time
+	})
+
 	for _, tx := range txs {
 		err := applyTx(tx, s)
 		if err != nil {
@@ -259,11 +227,6 @@ func applyTXs(txs []Tx, s *State) error {
 }
 
 func applyTx(tx Tx, s *State) error {
-	if tx.IsReward() {
-		s.Balances[tx.To] += tx.Value
-		return nil
-	}
-
 	if tx.Value > s.Balances[tx.From] {
 		return fmt.Errorf("wrong TX. Sender '%s' balance is %d TBB. Tx cost is %d TBB", tx.From, s.Balances[tx.From], tx.Value)
 	}
