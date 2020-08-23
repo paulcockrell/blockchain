@@ -12,7 +12,8 @@ import (
 )
 
 type State struct {
-	Balances map[common.Address]uint
+	Balances      map[common.Address]uint
+	Account2Nonce map[common.Address]uint
 
 	dbFile *os.File
 
@@ -22,7 +23,7 @@ type State struct {
 }
 
 func NewStateFromDisk(dataDir string) (*State, error) {
-	err := initDataDirIfNotExists(dataDir)
+	err := InitDataDirIfNotExists(dataDir, []byte(genesisJSON))
 	if err != nil {
 		return &State{}, err
 	}
@@ -37,6 +38,8 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 		balances[account] = balance
 	}
 
+	account2nonce := make(map[common.Address]uint)
+
 	dbFilePath := getBlocksDBFilePath(dataDir)
 	f, err := os.OpenFile(
 		dbFilePath,
@@ -49,6 +52,7 @@ func NewStateFromDisk(dataDir string) (*State, error) {
 
 	state := &State{
 		balances,
+		account2nonce,
 		f,
 		Block{},
 		Hash{},
@@ -124,11 +128,16 @@ func (s *State) AddBlock(b Block) (Hash, error) {
 	}
 
 	s.Balances = pendingState.Balances
+	s.Account2Nonce = pendingState.Account2Nonce
 	s.latestBlockHash = blockHash
 	s.latestBlock = b
 	s.hasGenesisBlock = true
 
 	return blockHash, nil
+}
+
+func (s *State) GetNextAccountNonce(account common.Address) uint {
+	return s.Account2Nonce[account] + 1
 }
 
 func (s *State) NextBlockNumber() uint64 {
@@ -173,9 +182,14 @@ func (s *State) copy() State {
 	c.latestBlock = s.latestBlock
 	c.latestBlockHash = s.latestBlockHash
 	c.Balances = make(map[common.Address]uint)
+	c.Account2Nonce = make(map[common.Address]uint)
 
 	for acc, balance := range s.Balances {
 		c.Balances[acc] = balance
+	}
+
+	for acc, nonce := range s.Account2Nonce {
+		c.Account2Nonce[acc] = nonce
 	}
 
 	return c
@@ -211,7 +225,7 @@ func applyBlock(b Block, s *State) error {
 	return nil
 }
 
-func applyTXs(txs []Tx, s *State) error {
+func applyTXs(txs []SignedTx, s *State) error {
 	sort.Slice(txs, func(i, j int) bool {
 		return txs[i].Time < txs[j].Time
 	})
@@ -226,13 +240,35 @@ func applyTXs(txs []Tx, s *State) error {
 	return nil
 }
 
-func applyTx(tx Tx, s *State) error {
+func applyTx(tx SignedTx, s *State) error {
+	ok, err := tx.IsAuthentic()
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return fmt.Errorf(
+			"wrong TX. Sender '%s' is forged", tx.From.String(),
+		)
+	}
+
+	expectedNonce := s.GetNextAccountNonce(tx.From)
+	if tx.Nonce != expectedNonce {
+		return fmt.Errorf(
+			"wrong TX. Sender '%s' next nonce must be '%d' not '%d'",
+			tx.From.String(),
+			expectedNonce,
+			tx.Nonce,
+		)
+	}
+
 	if tx.Value > s.Balances[tx.From] {
 		return fmt.Errorf("wrong TX. Sender '%s' balance is %d TBB. Tx cost is %d TBB", tx.From, s.Balances[tx.From], tx.Value)
 	}
 
 	s.Balances[tx.From] -= tx.Value
 	s.Balances[tx.To] += tx.Value
+	s.Account2Nonce[tx.From] = tx.Nonce
 
 	return nil
 }

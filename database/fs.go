@@ -10,7 +10,7 @@ const databaseFolderName = "database"
 const genesisFileName = "genesis.json"
 const blockFileName = "block.db"
 
-func initDataDirIfNotExists(dataDir string) error {
+func InitDataDirIfNotExists(dataDir string, genesis []byte) error {
 	if fileExist(getGenesisJSONFilePath(dataDir)) {
 		return nil
 	}
@@ -19,7 +19,7 @@ func initDataDirIfNotExists(dataDir string) error {
 		return err
 	}
 
-	if err := writeGenesisToDisk(getGenesisJSONFilePath(dataDir)); err != nil {
+	if err := writeGenesisToDisk(getGenesisJSONFilePath(dataDir), genesis); err != nil {
 		return err
 	}
 
