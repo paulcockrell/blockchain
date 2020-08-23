@@ -1,6 +1,13 @@
 package wallet
 
-import "path/filepath"
+import (
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"fmt"
+	"path/filepath"
+
+	"github.com/ethereum/go-ethereum/crypto"
+)
 
 const keystoreDirName = "keystore"
 
@@ -15,4 +22,21 @@ const KimcAccount = "0xEC205dcb742008680CA0a53a0748Fd5C14E3f769"
 
 func GetKeystoreDirPath(dataDir string) string {
 	return filepath.Join(dataDir, keystoreDirName)
+}
+
+func Sign(msg []byte, privKey *ecdsa.PrivateKey) (sig []byte, err error) {
+	msgHash := sha256.Sum256(msg)
+
+	return crypto.Sign(msgHash[:], privKey)
+}
+
+func Verify(msg, sig []byte) (*ecdsa.PublicKey, error) {
+	msgHash := sha256.Sum256(msg)
+
+	recoveredPubKey, err := crypto.SigToPub(msgHash[:], sig)
+	if err != nil {
+		return nil, fmt.Errorf("unable to verify message signature %s", err.Error())
+	}
+
+	return recoveredPubKey, nil
 }
