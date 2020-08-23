@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/ethereum/go-ethereum/accounts/keystore"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/paulcockrell/blockchain/database"
 )
 
 const keystoreDirName = "keystore"
@@ -24,6 +27,24 @@ func GetKeystoreDirPath(dataDir string) string {
 	return filepath.Join(dataDir, keystoreDirName)
 }
 
+func NewKeystoreAccount(dataDir, password string) (common.Address, error) {
+	ks := keystore.NewKeyStore(
+		GetKeystoreDirPath(dataDir),
+		keystore.StandardScryptN,
+		keystore.StandardScryptP,
+	)
+
+	acc, err := ks.NewAccount(password)
+	if err != nil {
+		return common.Address{}, err
+	}
+
+	return acc.Address, nil
+}
+
+func SignTxWithKeystoreAccount(tx database.Tx, acc common.Address, pwd string) {
+
+}
 func Sign(msg []byte, privKey *ecdsa.PrivateKey) (sig []byte, err error) {
 	msgHash := sha256.Sum256(msg)
 
