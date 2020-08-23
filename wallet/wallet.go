@@ -3,9 +3,15 @@ package wallet
 import "path/filepath"
 
 const keystoreDirName = "keystore"
-const PaulcAccount = "0x2858e7edea0FeD8d3255f1b5b4d9987568095062"
-const DavecAccount = "0x21973d33e048f5ce006fd7b41f51725c30e4b76b"
-const KimcAccount = "0x84470a31D271ea400f34e7A697F36bE0e866a716"
+
+// Datastore filepath ~/.tbb_paulc
+const PaulcAccount = "0xb61E2B65e6066b0575EdD91f992B8ee8Dbd96481"
+
+// Datastore filepath ~/.tbb_davec
+const DavecAccount = "0x86d4ba480A6b65C21A1d652C51E15576b269A5E7"
+
+// Datastore filepath ~/.tbb_kimc
+const KimcAccount = "0xEC205dcb742008680CA0a53a0748Fd5C14E3f769"
 
 func GetKeystoreDirPath(dataDir string) string {
 	return filepath.Join(dataDir, keystoreDirName)

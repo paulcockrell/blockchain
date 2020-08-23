@@ -12,7 +12,7 @@ var genesisJSON = `
 	"genesis_time": "2020-08-17T15:53:00.000000000Z",
 	"chain_id": "the-blockchain-bar-ledger",
 	"balances": {
-		"paulc": 1000000
+		"0xb61E2B65e6066b0575EdD91f992B8ee8Dbd96481": 1000000
 	}
 }`
 
